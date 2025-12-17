@@ -2,95 +2,125 @@
 #include <vector>
 #include <string>
 
-// Подключаем наши заголовочные файлы
+// Подключение наших модулей
 #include "SimpleRNG.h"
 #include "Mask.h"
 #include "MemReserver.h"
 
-// Класс для теста MemReserver
-struct TestObj {
+// Тестовый класс для проверки MemReserver (чтобы видеть вызов конструктора/деструктора)
+struct TestData 
+{
     int id;
-    std::string name;
-    TestObj(int i, std::string n) : id(i), name(n) {
-        std::cout << "  [TestObj Constructed] " << name << "\n";
+    std::string label;
+
+    TestData(int i, std::string s) : id(i), label(s) 
+    { 
+        std::cout << "  [TestData Constructor] ID: " << id << ", Label: " << label << "\n"; 
     }
-    ~TestObj() {
-        std::cout << "  [TestObj Destructed] " << name << "\n";
+    
+    ~TestData() 
+    { 
+        std::cout << "  [TestData Destructor]  ID: " << id << "\n"; 
     }
 };
 
-int main() {
-    // --- Тест 1: SimpleRNG ---
-    std::cout << "=== 1. SimpleRNG Test ===\n";
-    // Создаем генератор: m=1, a=5, c=0.2 (параметры из примера задания)
-    SimpleRNG generator(5, 0.2, 1);
-    generator.reset(0.4); // Начальное состояние
+int main() 
+{
+    // ==========================================
+    // ТЕСТ 1: Генератор случайных чисел
+    // ==========================================
+    std::cout << "--- Test 1: SimpleRNG ---\n";
+    
+    // Параметры: a=5, c=0.2, m=1
+    SimpleRNG generator(5.0, 0.2, 1.0);
+    generator.reset(0.4); // Начальное состояние X[0] = 0.4
 
-    std::vector<double> vec;
-    // Копируем в вектор, пока не сработает условие остановки (повтор цикла)
-    // end(0.01) означает точность сравнения 0.01
-    std::copy(generator.begin(), generator.end(0.01), std::back_inserter(vec));
+    std::vector<double> results;
+    
+    // Используем итераторы. end(0.001) означает: 
+    // "остановись, когда число станет равно 0.4 с точностью 0.001"
+    auto it_begin = generator.begin();
+    auto it_end = generator.end(0.001);
+
+    // Собираем числа вручную (аналог std::copy)
+    int safety_counter = 0;
+    for (auto it = it_begin; it != it_end; ++it)
+    {
+        results.push_back(*it);
+        
+        // Защита от бесконечного цикла (если параметры подобраны так, что цикл не замыкается)
+        if (++safety_counter > 20) break; 
+    }
 
     std::cout << "Generated sequence: ";
-    for (auto v : vec) std::cout << v << " ";
+    for (double val : results) std::cout << val << " ";
     std::cout << "\n\n";
 
-    // --- Тест 2: Mask ---
-    std::cout << "=== 2. Mask Test ===\n";
-    Mask<3> mask(1, 0, 1); // Маска размера 3: оставить, убрать, оставить
-    std::cout << "Mask size: " << mask.size() << "\n";
 
-    std::vector<int> numbers = {1, 2, 3, 4, 5, 6, 7};
-    std::cout << "Original: ";
-    for(int x : numbers) std::cout << x << " "; 
+    // ==========================================
+    // ТЕСТ 2: Маска (Mask)
+    // ==========================================
+    std::cout << "--- Test 2: Mask ---\n";
+    
+    // Маска: 1 (оставить), 0 (убрать), 1 (оставить)
+    Mask<3> filter_mask(1, 0, 1); 
+    
+    std::vector<int> numbers = {10, 20, 30, 40, 50, 60, 70};
+    
+    std::cout << "Original vector: ";
+    for (auto n : numbers) std::cout << n << " ";
     std::cout << "\n";
 
-    // Slice: модифицирует numbers
-    // Маска {1,0,1} применяется циклично:
-    // 1(keep), 2(drop), 3(keep), 4(keep), 5(drop), 6(keep), 7(keep)
-    mask.slice(numbers);
+    // 1. Тест метода slice (модификация)
+    // Паттерн {1,0,1} применяется к {10,20,30, 40,50,60, 70}
+    // Ожидаем: 10(да), 20(нет), 30(да), 40(да), 50(нет), 60(да), 70(да) -> {10, 30, 40, 60, 70}
+    filter_mask.slice(numbers);
     
-    std::cout << "Sliced:   ";
-    for(int x : numbers) std::cout << x << " "; 
+    std::cout << "After slice:     ";
+    for (auto n : numbers) std::cout << n << " ";
     std::cout << "\n";
 
-    // Transform: создает новый массив, умножая элементы под маской на 10
-    std::vector<int> nums2 = {1, 2, 3, 4, 5};
-    auto transformed = mask.transform(nums2, [](int x){ return x * 10; });
+    // 2. Тест transform
+    // Умножаем элементы на 2 согласно маске
+    std::vector<int> source = {1, 2, 3, 4, 5};
+    auto transformed = filter_mask.transform(source, [](int x) { return x * 2; });
     
-    std::cout << "Transformed (nums2): ";
-    for(int x : transformed) std::cout << x << " ";
+    std::cout << "Transformed:     ";
+    for (auto n : transformed) std::cout << n << " ";
     std::cout << "\n\n";
 
-    // --- Тест 3: MemReserver ---
-    std::cout << "=== 3. MemReserver Test ===\n";
-    // Резервируем место под 3 объекта TestObj
-    MemReserver<TestObj, 3> reserver;
 
-    try {
+    // ==========================================
+    // ТЕСТ 3: Выделятор памяти (MemReserver)
+    // ==========================================
+    std::cout << "--- Test 3: MemReserver ---\n";
+    
+    // Создаем пул на 2 объекта
+    MemReserver<TestData, 2> memory_pool;
+
+    try 
+    {
         // Создаем объекты
-        TestObj& o1 = reserver.create(1, "Object 1");
-        TestObj& o2 = reserver.create(2, "Object 2");
+        TestData& obj1 = memory_pool.create(101, "Alpha");
+        TestData& obj2 = memory_pool.create(102, "Beta");
         
-        std::cout << "Count created: " << reserver.count() << "\n";
-        std::cout << "Position of o2: " << reserver.position(o2) << "\n"; // Должно быть 1
+        std::cout << "Objects count: " << memory_pool.count() << "\n";
+        
+        // Проверяем поиск позиции
+        size_t pos = memory_pool.position(obj1);
+        std::cout << "Obj1 is at index: " << pos << "\n";
 
         // Удаляем первый объект
-        size_t pos1 = reserver.position(o1);
-        reserver.destroy(pos1); // Метод называется destroy (вместо delete)
-        std::cout << "After delete o1, count: " << reserver.count() << "\n";
+        memory_pool.delete_item(pos);
+        std::cout << "Obj1 deleted. Count: " << memory_pool.count() << "\n";
 
-        // Пытаемся получить удаленный объект (ошибка)
-        // reserver.get(pos1); // Выбросит EmptySlotError
-
-        // Заполняем до отказа
-        reserver.create(3, "Object 3");
-        reserver.create(4, "Object 4");
-        std::cout << "Full. Trying one more...\n";
-        reserver.create(5, "Object 5"); // Должно выбросить исключение
+        // Проверяем переполнение
+        memory_pool.create(103, "Gamma"); // Займет место удаленного obj1
+        memory_pool.create(104, "Delta"); // ОШИБКА: места нет (всего 2 слота)
     }
-    catch (const std::exception& e) {
-        std::cout << "EXCEPTION CAUGHT: " << e.what() << "\n";
+    catch (const std::exception& ex) 
+    {
+        std::cout << "EXCEPTION caught: " << ex.what() << "\n";
     }
 
     return 0;
