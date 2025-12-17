@@ -1,38 +1,43 @@
 #pragma once
 #include <iterator>
-#include <cmath>
+#include <cmath> // Для std::fmod
 #include <vector>
 
-// Задание 1: Генератор (линейный конгруэнтный метод)
+// Задание 1: Генератор псевдослучайных чисел
+// Формула: X[N+1] = (a * X[N] + c) % m
 class SimpleRNG
 {
 private:
-    double _a, _c, _m;
-    double _start; // Начальное число
-    double _curr;  // Текущее число
+    double a, c, m;
+    
+    double start_val; // Начальное значение (X0)
+    double current;   // Текущее значение
 
 public:
-    SimpleRNG(double a, double c, double m) 
-        : _a(a), _c(c), _m(m), _start(0), _curr(0)
+    // Конструктор инициализации
+    SimpleRNG(double _a, double _c, double _m) 
+        : a(_a), c(_c), m(_m), start_val(0), current(0)
     {
     }
 
-    void reset(double start_val)
+    // Сброс с установкой нового начального значения
+    void reset(double new_start)
     {
-        _start = start_val;
-        _curr = start_val;
+        start_val = new_start;
+        current = new_start;
     }
 
+    // Сброс к сохраненному начальному значению
     void reset()
     {
-        _curr = _start;
+        current = start_val;
     }
 
-    // Итератор для совместимости с STL
+    // Реализация InputIterator для совместимости со стандартной библиотекой
     class Iterator
     {
     public:
-        // Трейты
+        // Определение типов для итератора (требование STL)
         using iterator_category = std::input_iterator_tag;
         using value_type = double;
         using difference_type = std::ptrdiff_t;
@@ -40,38 +45,46 @@ public:
         using reference = const double&;
 
     private:
-        SimpleRNG* _gen;
-        double _val;
-        double _eps;
-        bool _is_end; 
+        SimpleRNG* rng_ptr;   // Указатель на генератор
+        double value;         // Значение, на которое указывает итератор
+        double eps;           // Точность сравнения (для end)
+        bool is_sentinel;     // Флаг, является ли итератор "концевым"
 
     public:
-        // Обычный конструктор
-        Iterator(SimpleRNG* gen, double v) 
-            : _gen(gen), _val(v), _eps(0), _is_end(false) 
+        // Конструктор для обычного итератора
+        Iterator(SimpleRNG* ptr, double v) 
+            : rng_ptr(ptr), value(v), eps(0), is_sentinel(false) 
         {
         }
 
-        // Конструктор для end()
-        Iterator(double target, double eps) 
-            : _gen(nullptr), _val(target), _eps(eps), _is_end(true) 
+        // Конструктор для итератора end()
+        Iterator(double target, double _eps) 
+            : rng_ptr(nullptr), value(target), eps(_eps), is_sentinel(true) 
         {
         }
 
-        reference operator*() const { return _val; }
+        // Оператор разыменования
+        reference operator*() const 
+        { 
+            return value; 
+        }
 
+        // Префиксный инкремент: генерация следующего числа
         Iterator& operator++()
         {
-            if (_gen)
+            if (rng_ptr)
             {
-                // Формула из задания
-                double next = std::fmod((_gen->_a * _val + _gen->_c), _gen->_m);
-                _val = next;
-                _gen->_curr = next;
+                // Вычисляем следующее значение по формуле
+                // Используем fmod, так как работаем с double
+                double next = std::fmod((rng_ptr->a * value + rng_ptr->c), rng_ptr->m);
+                
+                value = next;
+                rng_ptr->current = next; // Обновляем состояние генератора
             }
             return *this;
         }
 
+        // Постфиксный инкремент
         Iterator operator++(int)
         {
             Iterator tmp = *this;
@@ -79,23 +92,41 @@ public:
             return tmp;
         }
 
+        // Оператор сравнения
         bool operator==(const Iterator& other) const
         {
-            // Если сравниваем с end(), проверяем точность eps
-            if (other._is_end)
-                return std::abs(_val - other._val) < other._eps;
+            // Сравнение с "концевым" итератором
+            // Проверяем, вернулись ли мы к началу цикла с заданной точностью
+            if (other.is_sentinel)
+            {
+                return std::abs(value - other.value) < other.eps;
+            }
             
-            if (_is_end)
-                return std::abs(other._val - _val) < _eps;
+            if (is_sentinel)
+            {
+                return std::abs(other.value - value) < eps;
+            }
             
-            return _val == other._val;
+            // Сравнение двух обычных итераторов
+            return value == other.value;
         }
 
-        bool operator!=(const Iterator& other) const { return !(*this == other); }
+        bool operator!=(const Iterator& other) const 
+        { 
+            return !(*this == other); 
+        }
     };
 
-    Iterator begin() { return Iterator(this, _curr); }
-    
-    // end хранит начальное значение, чтобы поймать цикл
-    Iterator end(double eps = 0.05) { return Iterator(_start, eps); }
+    // Возвращает итератор на текущее состояние
+    Iterator begin() 
+    { 
+        return Iterator(this, current); 
+    }
+
+    // Возвращает итератор конца.
+    // Он "ждет" появления числа start_val с погрешностью eps.
+    Iterator end(double eps = 0.05) 
+    { 
+        return Iterator(start_val, eps); 
+    }
 };
