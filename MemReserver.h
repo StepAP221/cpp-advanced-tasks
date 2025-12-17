@@ -1,196 +1,117 @@
 #pragma once
-#include <new>          // Для placement new
-#include <stdexcept>    // Для std::exception
+#include <new>
+#include <stdexcept>
 #include <string>
-#include <cstddef>      // Для std::byte
-#include <utility>      // Для std::forward
+#include <cstddef>
+#include <utility>
 
-// --- Классы ошибок (Исключения) ---
-
-// Ошибка: закончилось место
-class NoSpaceError : public std::exception 
+// Исключения
+class NoSlots : public std::exception 
 {
-    std::string _err_msg;
+    std::string msg;
 public:
-    NoSpaceError(size_t count) : _err_msg("Not enough slots. Objects created: " + std::to_string(count)) {}
-    const char* what() const noexcept override { return _err_msg.c_str(); }
+    NoSlots(size_t n) : msg("Места нет. Создано: " + std::to_string(n)) {}
+    const char* what() const noexcept override { return msg.c_str(); }
 };
 
-// Ошибка: обращение к пустому слоту
-class EmptySlotAccessError : public std::exception 
+class EmptySlot : public std::exception 
 {
 public:
-    const char* what() const noexcept override { return "Accessing an empty or invalid slot"; }
+    const char* what() const noexcept override { return "Слот пуст или индекс неверен"; }
 };
 
-// Ошибка: объект не найден в хранилище
-class ObjectNotManagedError : public std::exception 
+class WrongObj : public std::exception 
 {
 public:
-    const char* what() const noexcept override { return "Object pointer does not belong to this storage"; }
+    const char* what() const noexcept override { return "Объект не из этого хранилища"; }
 };
 
 
-/**
- * Задача 3: Выделятор памяти (MemReserver).
- * T - тип хранимого объекта.
- * Capacity - максимальное количество объектов.
- */
-template <typename T, size_t Capacity>
+// Задание 3: Менеджер памяти
+template <typename T, size_t Cap>
 class MemReserver
 {
 private:
-    // Буфер сырой памяти. 
-    // alignas(T) гарантирует, что память будет выровнена правильно для типа T.
-    // Если этого не сделать, программа может упасть на некоторых процессорах.
-    alignas(T) std::byte _storage_buffer[Capacity * sizeof(T)];
-    
-    // Массив флагов: занят слот или нет
-    bool _is_occupied[Capacity];
+    // alignas нужен для правильного выравнивания T
+    alignas(T) std::byte _mem[Cap * sizeof(T)];
+    bool _used[Cap];
 
-    // Вспомогательный метод: превращает индекс в типизированный указатель T*
-    T* _resolve_ptr(size_t index)
-    {
-        // reinterpret_cast "жестко" говорит компилятору считать эти байты объектом T
-        return reinterpret_cast<T*>(&_storage_buffer[index * sizeof(T)]);
-    }
-
-    const T* _resolve_ptr(size_t index) const
-    {
-        return reinterpret_cast<const T*>(&_storage_buffer[index * sizeof(T)]);
-    }
+    T* ptr_at(size_t i) { return reinterpret_cast<T*>(&_mem[i * sizeof(T)]); }
+    const T* ptr_at(size_t i) const { return reinterpret_cast<const T*>(&_mem[i * sizeof(T)]); }
 
 public:
-    // Конструктор: просто помечаем все слоты свободными
     MemReserver()
     {
-        for(size_t i = 0; i < Capacity; ++i) 
-            _is_occupied[i] = false;
+        for(size_t i=0; i<Cap; ++i) _used[i] = false;
     }
 
-    // Деструктор: обязательно нужно уничтожить живые объекты
     ~MemReserver()
     {
-        for(size_t i = 0; i < Capacity; ++i)
+        // Удаляем оставшиеся объекты
+        for(size_t i=0; i<Cap; ++i)
         {
-            if (_is_occupied[i])
+            if (_used[i])
             {
-                // Явный вызов деструктора
-                _resolve_ptr(i)->~T();
-                _is_occupied[i] = false;
+                ptr_at(i)->~T();
+                _used[i] = false;
             }
         }
     }
 
-    // Запрещаем копирование хранилища (слишком сложная логика для тестового задания)
-    MemReserver(const MemReserver&) = delete;
-    MemReserver& operator=(const MemReserver&) = delete;
-
-    /**
-     * Метод create.
-     * Создает объект T в первом свободном слоте.
-     * Args&&... - универсальные ссылки для передачи аргументов в конструктор T.
-     */
+    // Создание объекта (placement new)
     template <typename... Args>
     T& create(Args&&... args)
     {
-        for(size_t i = 0; i < Capacity; ++i)
+        for(size_t i=0; i<Cap; ++i)
         {
-            if (!_is_occupied[i])
+            if (!_used[i])
             {
-                T* ptr = _resolve_ptr(i);
-                
-                // Placement New:
-                // Конструирует объект по адресу ptr, не выделяя новую память.
-                // std::forward идеально передает аргументы (сохраняя const/r-value).
-                new (ptr) T(std::forward<Args>(args)...);
-                
-                _is_occupied[i] = true;
-                return *ptr;
+                T* p = ptr_at(i);
+                new (p) T(std::forward<Args>(args)...);
+                _used[i] = true;
+                return *p;
             }
         }
-        // Если цикл кончился, а место не найдено
-        throw NoSpaceError(count());
+        throw NoSlots(count());
     }
 
-    /**
-     * Метод для удаления объекта по индексу.
-     * В C++ 'delete' - ключевое слово, поэтому метод назван 'delete_item'.
-     */
-    void delete_item(size_t index)
+    // Удаление по индексу
+    void delete_obj(size_t i)
     {
-        if (index >= Capacity || !_is_occupied[index])
-        {
-            throw EmptySlotAccessError();
-        }
+        if (i >= Cap || !_used[i]) throw EmptySlot();
         
-        // Вручную вызываем деструктор, чтобы объект корректно очистил свои ресурсы
-        _resolve_ptr(index)->~T();
-        _is_occupied[index] = false;
-    }
-    
-    // Псевдоним для совместимости с формулировкой задания (если требуется именно "delete")
-    // Но вызвать его как obj.delete(0) все равно нельзя в C++.
-    void delete_obj(size_t index)
-    {
-        delete_item(index);
+        ptr_at(i)->~T();
+        _used[i] = false;
     }
 
-    // Возвращает количество активных объектов
     size_t count() const
     {
         size_t cnt = 0;
-        for(size_t i = 0; i < Capacity; ++i)
-        {
-            if (_is_occupied[i]) cnt++;
-        }
+        for(size_t i=0; i<Cap; ++i) if (_used[i]) cnt++;
         return cnt;
     }
 
-    // Получение объекта по индексу
-    T& get(size_t index)
+    T& get(size_t i)
     {
-        if (index >= Capacity || !_is_occupied[index])
-        {
-            throw EmptySlotAccessError();
-        }
-        return *_resolve_ptr(index);
+        if (i >= Cap || !_used[i]) throw EmptySlot();
+        return *ptr_at(i);
     }
 
-    /**
-     * Метод position.
-     * Определяет индекс объекта в массиве через адресную арифметику.
-     */
-    size_t position(const T& object_ref)
+    // Поиск индекса по указателю
+    size_t position(const T& obj)
     {
-        // Получаем адреса в байтах
-        const std::byte* obj_addr = reinterpret_cast<const std::byte*>(&object_ref);
-        const std::byte* start_addr = &_storage_buffer[0];
-        const std::byte* end_addr = &_storage_buffer[Capacity * sizeof(T)];
+        const std::byte* addr = reinterpret_cast<const std::byte*>(&obj);
+        const std::byte* start = &_mem[0];
+        const std::byte* end = &_mem[Cap * sizeof(T)];
 
-        // 1. Проверяем, лежит ли адрес в пределах нашего массива
-        if (obj_addr < start_addr || obj_addr >= end_addr)
-        {
-            throw ObjectNotManagedError();
-        }
+        if (addr < start || addr >= end) throw WrongObj();
 
-        // Вычисляем смещение от начала
-        std::ptrdiff_t byte_offset = obj_addr - start_addr;
-        
-        // 2. Проверяем, попадает ли адрес ровно на начало слота
-        if (byte_offset % sizeof(T) != 0)
-        {
-            throw ObjectNotManagedError(); // Указатель указывает "в середину" объекта или слота
-        }
+        std::ptrdiff_t diff = addr - start;
+        if (diff % sizeof(T) != 0) throw WrongObj(); // Не выровнен
 
-        size_t index = byte_offset / sizeof(T);
-        
-        // 3. Проверяем, считается ли этот слот занятым
-        if (!_is_occupied[index])
-        {
-            throw ObjectNotManagedError(); // Слот пуст, значит объект там "мертв"
-        }
+        size_t idx = diff / sizeof(T);
+        if (!_used[idx]) throw WrongObj();
 
-        return index;
+        return idx;
     }
 };
