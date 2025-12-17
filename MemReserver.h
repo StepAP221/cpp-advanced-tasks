@@ -1,116 +1,141 @@
 #pragma once
-#include <new>
+#include <new>       // тут живет placement new
 #include <stdexcept>
 #include <string>
-#include <cstddef>
-#include <utility>
+#include <cstddef>   // для std::byte
+#include <utility>   // для forward
 
-// Исключения
-class NoSlots : public std::exception 
+// Мои классы ошибок
+class NoSpaceErr : public std::exception 
 {
     std::string msg;
 public:
-    NoSlots(size_t n) : msg("Места нет. Создано: " + std::to_string(n)) {}
+    NoSpaceErr(size_t n) : msg("Места нет. Уже создано: " + std::to_string(n)) {}
     const char* what() const noexcept override { return msg.c_str(); }
 };
 
-class EmptySlot : public std::exception 
+class BadSlotErr : public std::exception 
 {
 public:
-    const char* what() const noexcept override { return "Слот пуст или индекс неверен"; }
+    const char* what() const noexcept override { return "Слот пустой или кривой индекс"; }
 };
 
-class WrongObj : public std::exception 
+class NotFoundErr : public std::exception 
 {
 public:
-    const char* what() const noexcept override { return "Объект не из этого хранилища"; }
+    const char* what() const noexcept override { return "Объект не отсюда"; }
 };
 
 
-// Задание 3: Менеджер памяти
+// Класс-выделятор памяти
 template <typename T, size_t Cap>
 class MemReserver
 {
 private:
-    // alignas нужен для правильного выравнивания T
-    alignas(T) std::byte _mem[Cap * sizeof(T)];
-    bool _used[Cap];
+    // Буфер байтов. Важно: alignas(T) выравнивает память, иначе будет краш.
+    alignas(T) std::byte storage[Cap * sizeof(T)];
+    
+    // Массив, где true значит слот занят
+    bool used[Cap];
 
-    T* ptr_at(size_t i) { return reinterpret_cast<T*>(&_mem[i * sizeof(T)]); }
-    const T* ptr_at(size_t i) const { return reinterpret_cast<const T*>(&_mem[i * sizeof(T)]); }
+    // Хелпер, чтобы получить указатель на T по индексу
+    T* ptr(size_t i)
+    {
+        // Кастуем сырые байты в указатель на T
+        return reinterpret_cast<T*>(&storage[i * sizeof(T)]);
+    }
+
+    const T* ptr(size_t i) const
+    {
+        return reinterpret_cast<const T*>(&storage[i * sizeof(T)]);
+    }
 
 public:
     MemReserver()
     {
-        for(size_t i=0; i<Cap; ++i) _used[i] = false;
+        // Сначала всё свободно
+        for(size_t i=0; i<Cap; ++i) used[i] = false;
     }
 
     ~MemReserver()
     {
-        // Удаляем оставшиеся объекты
+        // В деструкторе надо удалить всё, что осталось живым
         for(size_t i=0; i<Cap; ++i)
         {
-            if (_used[i])
+            if (used[i])
             {
-                ptr_at(i)->~T();
-                _used[i] = false;
+                // Явно вызываем деструктор, т.к. delete вызывать нельзя (память статическая)
+                ptr(i)->~T();
+                used[i] = false;
             }
         }
     }
 
-    // Создание объекта (placement new)
+    // Создание объекта. Args&&... чтобы передать любые аргументы конструктора
     template <typename... Args>
     T& create(Args&&... args)
     {
+        // Ищем дырку
         for(size_t i=0; i<Cap; ++i)
         {
-            if (!_used[i])
+            if (!used[i])
             {
-                T* p = ptr_at(i);
+                T* p = ptr(i);
+                // Placement New: создаем объект прямо по адресу p
                 new (p) T(std::forward<Args>(args)...);
-                _used[i] = true;
+                
+                used[i] = true;
                 return *p;
             }
         }
-        throw NoSlots(count());
+        // Если дошли сюда, значит места нет
+        throw NoSpaceErr(count());
     }
 
-    // Удаление по индексу
+    // Удаление (назвал delete_obj, т.к. delete зарезервировано)
     void delete_obj(size_t i)
     {
-        if (i >= Cap || !_used[i]) throw EmptySlot();
+        if (i >= Cap || !used[i]) throw BadSlotErr();
         
-        ptr_at(i)->~T();
-        _used[i] = false;
+        // Руками зовем деструктор
+        ptr(i)->~T();
+        used[i] = false;
     }
 
+    // Сколько сейчас объектов
     size_t count() const
     {
-        size_t cnt = 0;
-        for(size_t i=0; i<Cap; ++i) if (_used[i]) cnt++;
-        return cnt;
+        size_t c = 0;
+        for(size_t i=0; i<Cap; ++i) if (used[i]) c++;
+        return c;
     }
 
     T& get(size_t i)
     {
-        if (i >= Cap || !_used[i]) throw EmptySlot();
-        return *ptr_at(i);
+        if (i >= Cap || !used[i]) throw BadSlotErr();
+        return *ptr(i);
     }
 
-    // Поиск индекса по указателю
+    // Поиск индекса по ссылке на объект. Магия указателей.
     size_t position(const T& obj)
     {
         const std::byte* addr = reinterpret_cast<const std::byte*>(&obj);
-        const std::byte* start = &_mem[0];
-        const std::byte* end = &_mem[Cap * sizeof(T)];
+        const std::byte* start = &storage[0];
+        const std::byte* end = &storage[Cap * sizeof(T)];
 
-        if (addr < start || addr >= end) throw WrongObj();
+        // Проверяем, внутри ли мы массива
+        if (addr < start || addr >= end) throw NotFoundErr();
 
+        // Считаем смещение в байтах
         std::ptrdiff_t diff = addr - start;
-        if (diff % sizeof(T) != 0) throw WrongObj(); // Не выровнен
+        
+        // Должно делиться на размер T без остатка
+        if (diff % sizeof(T) != 0) throw NotFoundErr();
 
         size_t idx = diff / sizeof(T);
-        if (!_used[idx]) throw WrongObj();
+        
+        // И слот должен быть помечен как занятый
+        if (!used[idx]) throw NotFoundErr();
 
         return idx;
     }
