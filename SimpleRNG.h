@@ -1,52 +1,38 @@
 #pragma once
 #include <iterator>
-#include <cmath> // Для std::fmod (остаток от деления дробных чисел)
+#include <cmath>
 #include <vector>
 
-/**
- * Задача 1: Генератор псевдослучайных чисел (SimpleRNG).
- * Реализует интерфейс InputIterator для совместимости с алгоритмами STL.
- */
+// Задание 1: Генератор (линейный конгруэнтный метод)
 class SimpleRNG
 {
 private:
-    // Параметры генератора согласно формуле: X[N+1] = (A * X[N] + C) % M
-    double _factor_a;   // Множитель (a)
-    double _term_c;     // Приращение (c)
-    double _modulus_m;  // Модуль (m)
-
-    double _initial_x;  // Начальное значение (X[0]), нужно для reset() и end()
-    double _current_x;  // Текущее значение генератора
+    double _a, _c, _m;
+    double _start; // Начальное число
+    double _curr;  // Текущее число
 
 public:
-    // Конструктор: инициализирует коэффициенты.
-    // m > 1, 0 < a < 1, 0 < c < m
     SimpleRNG(double a, double c, double m) 
-        : _factor_a(a), _term_c(c), _modulus_m(m), _initial_x(0.0), _current_x(0.0)
+        : _a(a), _c(c), _m(m), _start(0), _curr(0)
     {
     }
 
-    // Устанавливает новое начальное значение и сбрасывает текущее состояние
-    void reset(double start_value)
+    void reset(double start_val)
     {
-        _initial_x = start_value;
-        _current_x = start_value;
+        _start = start_val;
+        _curr = start_val;
     }
 
-    // Сбрасывает состояние к сохраненному начальному значению
     void reset()
     {
-        _current_x = _initial_x;
+        _curr = _start;
     }
 
-    /**
-     * Внутренний класс итератора.
-     * Позволяет использовать generator в циклах for(auto x : gen) и алгоритмах std::copy.
-     */
+    // Итератор для совместимости с STL
     class Iterator
     {
     public:
-        // Обязательные объявления типов для STL (traits)
+        // Трейты
         using iterator_category = std::input_iterator_tag;
         using value_type = double;
         using difference_type = std::ptrdiff_t;
@@ -54,93 +40,62 @@ public:
         using reference = const double&;
 
     private:
-        SimpleRNG* _rng_instance; // Указатель на сам генератор, чтобы менять его состояние
-        double _value;            // Значение, на которое указывает итератор в данный момент
-        double _epsilon;          // Погрешность сравнения (для end итератора)
-        bool _is_terminator;      // Флаг: true, если это итератор "конца" (end)
+        SimpleRNG* _gen;
+        double _val;
+        double _eps;
+        bool _is_end; 
 
     public:
-        // Конструктор обычного итератора (указывает на текущее число)
-        Iterator(SimpleRNG* rng, double val) 
-            : _rng_instance(rng), _value(val), _epsilon(0.0), _is_terminator(false) 
+        // Обычный конструктор
+        Iterator(SimpleRNG* gen, double v) 
+            : _gen(gen), _val(v), _eps(0), _is_end(false) 
         {
         }
 
-        // Конструктор итератора конца (sentinel).
-        // Он не привязан к генератору, а хранит условие остановки (значение и точность).
-        Iterator(double target_val, double eps) 
-            : _rng_instance(nullptr), _value(target_val), _epsilon(eps), _is_terminator(true) 
+        // Конструктор для end()
+        Iterator(double target, double eps) 
+            : _gen(nullptr), _val(target), _eps(eps), _is_end(true) 
         {
         }
 
-        // Оператор разыменования (*it)
-        reference operator*() const
-        {
-            return _value;
-        }
+        reference operator*() const { return _val; }
 
-        // Оператор префиксного инкремента (++it).
-        // Вычисляет следующее случайное число.
         Iterator& operator++()
         {
-            if (_rng_instance)
+            if (_gen)
             {
-                // Шаг 1: Вычисляем линейную часть a * X + c
-                double linear = (_rng_instance->_factor_a * _value) + _rng_instance->_term_c;
-                
-                // Шаг 2: Берем остаток от деления на m (для double используется fmod)
-                double next_val = std::fmod(linear, _rng_instance->_modulus_m);
-                
-                // Шаг 3: Обновляем итератор и состояние генератора
-                _value = next_val;
-                _rng_instance->_current_x = next_val;
+                // Формула из задания
+                double next = std::fmod((_gen->_a * _val + _gen->_c), _gen->_m);
+                _val = next;
+                _gen->_curr = next;
             }
             return *this;
         }
 
-        // Постфиксный инкремент (it++)
         Iterator operator++(int)
         {
-            Iterator temp = *this;
+            Iterator tmp = *this;
             ++(*this);
-            return temp;
+            return tmp;
         }
 
-        // Оператор сравнения.
-        // Это самая хитрая часть: мы считаем, что дошли до конца, 
-        // если текущее значение совпадает с начальным (цикл замкнулся) с точностью epsilon.
         bool operator==(const Iterator& other) const
         {
-            // Сценарий 1: Мы сравниваем текущий итератор с "концевым"
-            if (other._is_terminator)
-            {
-                return std::abs(_value - other._value) < other._epsilon;
-            }
-            // Сценарий 2: "Концевой" сравнивается с текущим
-            if (_is_terminator)
-            {
-                return std::abs(other._value - _value) < _epsilon;
-            }
-            // Сценарий 3: Два обычных итератора (сравниваем значения точно)
-            return _value == other._value;
+            // Если сравниваем с end(), проверяем точность eps
+            if (other._is_end)
+                return std::abs(_val - other._val) < other._eps;
+            
+            if (_is_end)
+                return std::abs(other._val - _val) < _eps;
+            
+            return _val == other._val;
         }
 
-        bool operator!=(const Iterator& other) const
-        {
-            return !(*this == other);
-        }
+        bool operator!=(const Iterator& other) const { return !(*this == other); }
     };
 
-    // Возвращает итератор на текущее состояние
-    Iterator begin()
-    {
-        return Iterator(this, _current_x);
-    }
-
-    // Возвращает итератор "конца".
-    // Он настроен на ожидание числа _initial_x с точностью eps.
-    Iterator end(double eps = 0.05)
-    {
-        return Iterator(_initial_x, eps);
-    }
+    Iterator begin() { return Iterator(this, _curr); }
+    
+    // end хранит начальное значение, чтобы поймать цикл
+    Iterator end(double eps = 0.05) { return Iterator(_start, eps); }
 };
