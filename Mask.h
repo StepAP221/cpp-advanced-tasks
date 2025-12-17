@@ -3,92 +3,116 @@
 #include <vector>
 #include <stdexcept>
 
-// Задание 2: Маска
+// Задание 2: Класс маски
 template <size_t N>
 class Mask
 {
 private:
-    std::array<int, N> _mask;
+    std::array<int, N> bits; // Хранение элементов маски
 
 public:
-    // Variadic template конструктор
+    // Конструктор с переменным количеством аргументов.
+    // Используем variadic templates для инициализации.
     template <typename... Args>
-    Mask(Args... args) : _mask{ static_cast<int>(args)... }
+    Mask(Args... args) : bits{ static_cast<int>(args)... }
     {
-        static_assert(sizeof...(Args) == N, "Неверное количество аргументов маски");
+        // Проверка количества аргументов на этапе компиляции
+        static_assert(sizeof...(Args) == N, "Количество аргументов не соответствует размеру маски");
         
-        // Проверяем, что только 0 и 1
-        for (int x : _mask)
+        // Проверка значений (допускаются только 0 и 1)
+        for (int val : bits)
         {
-            if (x != 0 && x != 1) throw std::logic_error("В маске только 0 и 1");
+            if (val != 0 && val != 1) 
+                throw std::logic_error("Маска может содержать только 0 и 1");
         }
     }
 
-    size_t size() const { return N; }
-
-    int at(size_t i) const
-    {
-        if (i >= N) throw std::out_of_range("Выход за пределы маски");
-        return _mask[i];
+    size_t size() const 
+    { 
+        return N; 
     }
 
-    // Slice: меняет контейнер на месте
-    template <typename T>
-    void slice(T& cont)
+    int at(size_t index) const
     {
-        auto reader = cont.begin();
-        auto writer = cont.begin();
-        size_t idx = 0;
-        size_t count = 0;
+        if (index >= N) throw std::out_of_range("Индекс выходит за пределы маски");
+        return bits[index];
+    }
 
-        while (reader != cont.end())
+    // Метод slice: удаляет элементы, где маска равна 0.
+    // Работает "на месте" (in-place), без создания копии контейнера.
+    template <typename Container>
+    void slice(Container& cont)
+    {
+        auto read_it = cont.begin();  // Итератор чтения
+        auto write_it = cont.begin(); // Итератор записи
+        
+        size_t idx = 0;
+        size_t kept_count = 0; // Считаем, сколько элементов оставили
+
+        while (read_it != cont.end())
         {
-            // Если в маске 1 - оставляем
-            if (_mask[idx % N] == 1)
+            // Циклический доступ к элементам маски
+            if (bits[idx % N] == 1)
             {
-                if (writer != reader) 
-                    *writer = std::move(*reader);
-                
-                ++writer;
-                count++;
+                // Если элемент нужно сохранить
+                if (write_it != read_it) 
+                {
+                    *write_it = std::move(*read_it); // Перемещаем элемент, чтобы не копировать
+                }
+                ++write_it;
+                kept_count++;
             }
-            ++reader;
+            // Если маска 0, элемент просто пропускается (перезаписывается позже или удаляется)
+            
+            ++read_it;
             ++idx;
         }
 
-        // Обрезаем лишнее
-        if (count < cont.size()) cont.resize(count);
+        // Уменьшаем размер контейнера до фактического количества элементов
+        if (kept_count < cont.size())
+        {
+            cont.resize(kept_count);
+        }
     }
 
-    // Transform: новый контейнер с измененными элементами
-    template <typename T, typename Func>
-    T transform(const T& src, Func f)
+    // Transform: создает новый контейнер, изменяя элементы по маске
+    template <typename Container, typename Func>
+    Container transform(const Container& src, Func f)
     {
-        T res = src;
+        Container result = src; // Создаем копию
         size_t idx = 0;
-        for (auto& el : res)
+        
+        for (auto& item : result)
         {
-            if (_mask[idx % N] == 1) el = f(el);
+            if (bits[idx % N] == 1)
+            {
+                item = f(item); // Применяем функцию преобразования
+            }
             idx++;
         }
-        return res;
+        return result;
     }
 
-    // Slice + Transform
-    template <typename T, typename Func>
-    T slice_and_transform(const T& src, Func f)
+    // Slice and Transform: и фильтрация, и изменение в новом контейнере
+    template <typename Container, typename Func>
+    Container slice_and_transform(const Container& src, Func f)
     {
-        T res;
-        // Резервируем память, если это вектор
-        if constexpr (std::is_same_v<T, std::vector<typename T::value_type>>)
-            res.reserve(src.size());
+        Container result;
+        // Оптимизация: резервируем память, если контейнер это поддерживает (например, vector)
+        if constexpr (std::is_same_v<Container, std::vector<typename Container::value_type>>)
+        {
+            result.reserve(src.size());
+        }
 
         size_t idx = 0;
-        for (const auto& el : src)
+        for (const auto& item : src)
         {
-            if (_mask[idx % N] == 1) res.push_back(f(el));
+            if (bits[idx % N] == 1)
+            {
+                result.push_back(f(item)); // Добавляем только подходящие элементы
+            }
             idx++;
         }
-        return res;
+        return result;
     }
 };
