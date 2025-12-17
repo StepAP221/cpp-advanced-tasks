@@ -6,87 +6,89 @@
 #include "Mask.h"
 #include "MemReserver.h"
 
-// Класс для проверки вызовов конструкторов/деструкторов
-struct TestItem 
+// Структура для тестов памяти
+struct TestEntity 
 {
-    int val;
-    TestItem(int v) : val(v) { std::cout << "  [TestItem] Конструктор " << val << "\n"; }
-    ~TestItem() { std::cout << "  [TestItem] Деструктор " << val << "\n"; }
+    int id;
+    TestEntity(int v) : id(v) { std::cout << "  [TestEntity] Конструктор ID: " << id << "\n"; }
+    ~TestEntity() { std::cout << "  [TestEntity] Деструктор ID: " << id << "\n"; }
 };
 
 int main() 
 {
-    std::cout << "=== Задание 1: Генератор ===\n";
-    // a=5, c=0.2, m=1
+    std::cout << "=== Тест 1: Генератор (SimpleRNG) ===\n";
+    // Параметры: a=5, c=0.2, m=1
     SimpleRNG gen(5, 0.2, 1);
     gen.reset(0.4);
 
-    std::vector<double> res;
-    // Копируем, пока не вернемся к 0.4 с точностью 0.001
+    std::vector<double> results;
+    // Используем итераторы. Копируем значения, пока не вернемся к 0.4 (точность 0.001)
     auto it = gen.begin();
-    auto stop = gen.end(0.001);
+    auto end_it = gen.end(0.001);
 
-    int limit = 0;
-    // Крутим цикл руками, чтобы было нагляднее
-    while (it != stop)
+    int safety_limit = 0;
+    while (it != end_it)
     {
-        res.push_back(*it);
+        results.push_back(*it);
         ++it;
-        if (++limit > 20) break; // На всякий случай
+        // Ограничитель на случай бесконечного цикла
+        if (++safety_limit > 20) break; 
     }
 
-    std::cout << "Числа: ";
-    for (auto x : res) std::cout << x << " ";
+    std::cout << "Сгенерировано: ";
+    for (auto val : results) std::cout << val << " ";
     std::cout << "\n\n";
 
 
-    std::cout << "=== Задание 2: Маска ===\n";
-    // Маска: да, нет, да
+    std::cout << "=== Тест 2: Маска (Mask) ===\n";
+    // Маска: 1(оставить), 0(удалить), 1(оставить)
     Mask<3> m(1, 0, 1); 
     
-    std::vector<int> nums = {10, 20, 30, 40, 50};
-    std::cout << "Было: ";
-    for(auto x : nums) std::cout << x << " ";
+    std::vector<int> data = {10, 20, 30, 40, 50};
+    std::cout << "Исходные данные: ";
+    for(auto x : data) std::cout << x << " ";
     std::cout << "\n";
 
-    // Slice
-    m.slice(nums); // Ожидаем 10, 30, 40 (50 отпадет т.к. 0 в маске)
-    std::cout << "Стало (slice): ";
-    for(auto x : nums) std::cout << x << " ";
+    // Проверка slice
+    m.slice(data); // Должны остаться 10, 30, 40
+    std::cout << "После slice: ";
+    for(auto x : data) std::cout << x << " ";
     std::cout << "\n";
 
-    // Transform
-    auto changed = m.transform(nums, [](int x){ return x * 10; });
-    std::cout << "Трансформ (x10): ";
+    // Проверка transform
+    auto changed = m.transform(data, [](int x){ return x * 2; });
+    std::cout << "После transform (x2): ";
     for(auto x : changed) std::cout << x << " ";
     std::cout << "\n\n";
 
 
-    std::cout << "=== Задание 3: Память ===\n";
-    MemReserver<TestItem, 2> mem;
+    std::cout << "=== Тест 3: Память (MemReserver) ===\n";
+    MemReserver<TestEntity, 2> pool;
 
     try 
     {
-        auto& t1 = mem.create(111);
-        auto& t2 = mem.create(222);
+        auto& obj1 = pool.create(100);
+        auto& obj2 = pool.create(200);
         
-        std::cout << "Занято мест: " << mem.count() << "\n";
+        std::cout << "Занято слотов: " << pool.count() << "\n";
         
-        // Проверка позиции
-        size_t pos = mem.position(t1);
-        std::cout << "t1 лежит в слоте: " << pos << "\n";
+        // Проверка определения позиции
+        size_t pos = pool.position(obj1);
+        std::cout << "obj1 находится в слоте: " << pos << "\n";
 
-        // Удаление
-        mem.delete_obj(pos);
-        std::cout << "Удалили t1. Занято: " << mem.count() << "\n";
+        // Удаление объекта
+        pool.delete_obj(pos);
+        std::cout << "Удалили obj1. Занято: " << pool.count() << "\n";
 
-        // Создаем новые, проверяем переполнение
-        mem.create(333); // займет 0-й слот
-        mem.create(444); // ОШИБКА, места нет (всего 2)
+        // Проверка повторного использования памяти
+        pool.create(300); // Займет освободившийся слот
+        
+        // Проверка переполнения
+        pool.create(400); // Должно выбросить исключение (мест больше нет)
     }
     catch (const std::exception& e) 
     {
-        std::cout << "Поймали ошибку: " << e.what() << "\n";
+        std::cout << "Исключение: " << e.what() << "\n";
     }
 
     return 0;
